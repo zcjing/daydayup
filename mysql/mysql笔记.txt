@@ -1,0 +1,180 @@
+几个简单的基本的sql语句
+选择：select * from table1 where 范围
+插入：insert into table1(field1,field2) values(value1,value2)
+删除：delete from table1 where 范围
+更新：update table1 set field1=value1 where 范围
+查找：select * from table1 where field1 like ’%value1%’ ---like的语法很精妙，查资料!
+排序：select * from table1 order by field1,field2 [desc]
+总数：select count as totalcount from table1
+求和：select sum(field1) as sumvalue from table1
+平均：select avg(field1) as avgvalue from table1
+最大：select max(field1) as maxvalue from table1
+最小：select min(field1) as minvalue from table1
+
+
+mysql搭建
+     安装包准备 mysql57-community-release-el7-11.noarch.rpm 会安装mysql yum源
+	 使用	 yum install mysql
+             yum install mysql-server
+             yum install mysql-devel  安装
+	配置自启动systemctl enable mysqld
+	          systemctl start mysqld
+     mysql安装完成之后，在/var/log/mysqld.log文件中给root生成了一个默认密码。通过下面的方式找到root默认密码，然后登录mysql进行修改：
+    grep 'temporary password' /var/log/mysqld.log
+	使用mysql -u root -p密码进入
+修改密码规则
+	set global validate_password_policy=LOW;
+	flush privileges;
+修改密码
+	set password for 'root'@'localhost'=password('密码'); 
+	SET PASSWORD FOR 'root'@'%' = PASSWORD('密码');
+主从同步配置
+    主198，备199
+	1.先登陆主机上新建backup用户，给与REPLICATION SLAVE（从复制）权限
+	GRANT REPLICATION SLAVE ON *.* TO 'backup'@'172.27.34.199' IDENTIFIED BY '123456'
+	
+	2安装主从插件	插件目录 /usr/lib64/mysql/plugin/
+		mysql> use mysql
+		Reading table information for completion of table and column names
+		You can turn off this feature to get a quicker startup with -A
+
+		Database changed
+		mysql> select * from plugin;
+		+-------------------+----------------------+
+		| name              | dl                   |
+		+-------------------+----------------------+
+		| validate_password | validate_password.so |
+		+-------------------+----------------------+
+		1 row in set (0.00 sec)
+
+		mysql> show variables like '%plugin%';
+		+-------------------------------+--------------------------+
+		| Variable_name                 | Value                    |
+		+-------------------------------+--------------------------+
+		| default_authentication_plugin | mysql_native_password    |
+		| plugin_dir                    | /usr/lib64/mysql/plugin/ |
+		+-------------------------------+--------------------------+
+		2 rows in set (0.01 sec)
+
+		mysql> install plugin rpl_semi_sync_master SONAME 'semisync_master.so';
+		Query OK, 0 rows affected (0.01 sec)
+
+		mysql> select * from plugin;
+		+----------------------+----------------------+
+		| name                 | dl                   |
+		+----------------------+----------------------+
+		| rpl_semi_sync_master | semisync_master.so   |
+		| validate_password    | validate_password.so |
+		+----------------------+----------------------+
+		2 rows in set (0.00 sec)
+      备机安装slave
+	        mysql> install plugin rpl_semi_sync_slave SONAME 'semisync_slave.so';
+			Query OK, 0 rows affected (0.02 sec)
+
+			mysql> select * from plugin;
+			+---------------------+----------------------+
+			| name                | dl                   |
+			+---------------------+----------------------+
+			| rpl_semi_sync_slave | semisync_slave.so    |
+			| validate_password   | validate_password.so |
+			+---------------------+----------------------+
+			2 rows in set (0.00 sec)
+    
+	 3.打开半同步参数（注意下面3个参数须写进my.cnf）
+	   主库
+		mysql> set global rpl_semi_sync_master_enabled=1;
+		Query OK, 0 rows affected (0.00 sec)
+	  
+		mysql> set global rpl_semi_sync_master_timeout=30000;
+		Query OK, 0 rows affected (0.00 sec)
+		
+		mysql> show variables like '%rpl%';
+		+-------------------------------------------+------------+
+		| Variable_name                             | Value      |
+		+-------------------------------------------+------------+
+		| rpl_semi_sync_master_enabled              | ON         |
+		| rpl_semi_sync_master_timeout              | 30000      |
+		| rpl_semi_sync_master_trace_level          | 32         |
+		| rpl_semi_sync_master_wait_for_slave_count | 1          |
+		| rpl_semi_sync_master_wait_no_slave        | ON         |
+		| rpl_semi_sync_master_wait_point           | AFTER_SYNC |
+		| rpl_stop_slave_timeout                    | 31536000   |
+		+-------------------------------------------+------------+
+		7 rows in set (0.01 sec)
+       备库
+	   mysql> set global rpl_semi_sync_slave_enabled=1;
+		Query OK, 0 rows affected (0.00 sec)
+
+		mysql> show variables like '%rpl%';
+		+---------------------------------+----------+
+		| Variable_name                   | Value    |
+		+---------------------------------+----------+
+		| rpl_semi_sync_slave_enabled     | ON       |
+		| rpl_semi_sync_slave_trace_level | 32       |
+		| rpl_stop_slave_timeout          | 31536000 |
+		+---------------------------------+----------+
+		3 rows in set (0.00 sec)
+       检查同步状态show status like '%semi_sync%';
+	 
+
+		
+	
+	4.修改mysql配置文件
+	打开主机A的my.cnf，输入如下：（修改主数据库的配置文件my.cnf，开启BINLOG，并设置server-id的值，修改之后必须重启mysql服务）
+		[mysqld]
+		datadir=/var/lib/mysql
+		socket=/var/lib/mysql/mysql.sock
+		# Disabling symbolic-links is recommended to prevent assorted security risks
+		symbolic-links=0
+		log-error=/var/log/mysqld.log
+		pid-file=/var/run/mysqld/mysqld.pid
+		#慢日志
+		slow_query_log = ON
+		slow_query_log_file = /var/log/mysql/slow.log
+		long_query_time = 5
+		#BIN日志
+		server-id = 198
+		log-bin             =/var/log/mysql/master-bin.log   #确保此文件可写，开启bin-log 注意权限chown -R  mysql:mysql /var/log/mysql
+		binlog_format       =mixed   #格式
+		#read-only           =0  #主机，读写都可以
+		binlog-do-db        =test   #需要备份数据，多个写多行
+		binlog-ignore-db    =mysql #不需要备份的数据库，多个写多行
+ 
+	修改从数据库的my.cnf，增加server-id参数，指定复制使用的用户，主数据库服务器的ip，端口以及开始执行复制日志的文件和位置。打开从机B的my.cnf，输入（修改之后必须重启mysql服务）
+		server-id       = 199
+		log_bin         = /var/log/mysql/slave-bin.log
+		#read-only           =1 #慎重
+	
+	3.重启动，查看主post位置
+	   show master status 
+	 备机上开启同步配置
+		 CHANGE MASTER TO
+		 MASTER_HOST='172.27.34.198',
+		 MASTER_USER='backup',
+		 MASTER_PASSWORD='123456',
+		 MASTER_PORT=3306,
+		 MASTER_LOG_FILE='master-bin.000003',
+		 MASTER_LOG_POS=35966,
+		 MASTER_CONNECT_RETRY=10;
+	4.开启主从
+	     在slave上start slave
+		 查看同步状态 show slave status \G
+	
+	
+数据库导库
+    主库上mysqldump -u root -p test >~/backup.sql
+	传到备库；mysql -u root -p test <~/backup.sql
+主从同步不一致
+     解决方法：1停从库stop slave 
+	           2查看主库post
+			   3改从库同步配置（CHANGE MASTER TO
+								 MASTER_HOST='172.27.34.198',
+								 MASTER_USER='backup',
+								 MASTER_PASSWORD='123456',
+								 MASTER_PORT=3306,
+								 MASTER_LOG_FILE='master-bin.000003',
+								 MASTER_LOG_POS=35966,
+								 MASTER_CONNECT_RETRY=10;）
+			   4开启主从
+
+	

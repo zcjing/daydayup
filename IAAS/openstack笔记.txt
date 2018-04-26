@@ -1,0 +1,380 @@
+
+
+##################################################################
+换centOS 7.3装P版本
+172.27.34.172 控制节点
+172.27.34.175 计算节点
+	
+##安装基础环境
+	安装NTP
+	yum install centos-release-openstack-pike.x86_64
+	 yum upgrade
+	 yum install python-openstackclient
+	 yum install openstack-selinux
+	控制节点安装Marian SQL
+	yum install mariadb mariadb-server python2-PyMySQL
+	vi /etc/my.cnf.d/openstack.cnf
+	#
+	[mysqld]
+	bind-address = 172.27.34.172
+	default-storage-engine = innodb
+	innodb_file_per_table
+	max_connections = 4096
+	collation-server = utf8_general_ci
+	character-set-server = utf8
+	#
+
+	# systemctl enable mariadb.service
+	# systemctl start mariadb.service
+	mysql_secure_installation设置密码，默认123456
+	使用mysql -uroot -p123456测试是否成功
+
+	控制节点安装rabbitmq
+	yum install rabbitmq-server
+	# systemctl enable rabbitmq-server.service
+	# systemctl start rabbitmq-server.service
+	rabbitmqctl add_user openstack RABBIT_PASS
+	rabbitmqctl set_permissions openstack ".*" ".*" ".*"
+
+	控制节点安装memcache,身份鉴别模块缓存
+
+	yum install memcached python-memcached
+	# systemctl enable memcached.service
+	# systemctl start memcached.service
+
+## 控制节点安装identity模块
+	先建库表
+	mysql -u root -p 123456
+
+	CREATE DATABASE keystone;
+	GRANT ALL PRIVILEGES ON keystone.* TO'keystone'@'localhost' \
+	IDENTIFIED BY 'keystone';
+	GRANT ALL PRIVILEGES ON keystone.* TO'keystone'@'%' \
+	IDENTIFIED BY 'keystone';
+
+	[root@localhost keystone]# openssl rand -hex 10
+	abe2bd3d64bc397ed689
+
+	安装http服务
+	yum install openstack-keystone httpd mod_wsgi
+	vi /etc/keystone/keystone.conf
+	[DEFAULT]
+	admin_token = abe2bd3d64bc397ed689
+	[database]
+	connection = mysql+pymysql://keystone:keystone@controller/keystone
+	[token]
+	provider = fernet
+
+	su -s /bin/sh -c "keystone-manage db_sync" keystone
+	keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone
+
+	配置身份验证http服务
+	vi  /etc/httpd/conf/httpd.conf
+	ServerName controller
+
+	vi /etc/httpd/conf.d/wsgi-keystone.conf 
+	Listen 5000
+	Listen 35357
+
+	<VirtualHost *:5000>
+		WSGIDaemonProcess keystone-public processes=5 threads=1 user=keystone group=keystone display-name=%{GROUP}
+		WSGIProcessGroup keystone-public
+		WSGIScriptAlias / /usr/bin/keystone-wsgi-public
+		WSGIApplicationGroup %{GLOBAL}
+		WSGIPassAuthorization On
+		ErrorLogFormat "%{cu}t %M"
+		ErrorLog /var/log/httpd/keystone-error.log
+		CustomLog /var/log/httpd/keystone-access.log combined
+
+		<Directory /usr/bin>
+			Require all granted
+		</Directory>
+	</VirtualHost>
+
+	<VirtualHost *:35357>
+		WSGIDaemonProcess keystone-admin processes=5 threads=1 user=keystone group=keystone display-name=%{GROUP}
+		WSGIProcessGroup keystone-admin
+		WSGIScriptAlias / /usr/bin/keystone-wsgi-admin
+		WSGIApplicationGroup %{GLOBAL}
+		WSGIPassAuthorization On
+		ErrorLogFormat "%{cu}t %M"
+		ErrorLog /var/log/httpd/keystone-error.log
+		CustomLog /var/log/httpd/keystone-access.log combined
+		<Directory /usr/bin>
+			Require all granted
+		</Directory>
+	</VirtualHost>
+
+	[root@localhost keystone]# systemctl start httpd.service
+	[root@localhost keystone]# systemctl status httpd.service
+
+	export OS_TOKEN=abe2bd3d64bc397ed689
+	export OS_URL=http://controller:35357/v3
+	export OS_IDENTITY_API_VERSION=3
+	设置identity服务及ENDPOINT
+	openstack service create \
+	  --name keystone --description "OpenStack Identity" identity
+	openstack endpoint create --region RegionOne \
+	  identity public http://controller:5000/v3
+	openstack endpoint create --region RegionOne \
+	  identity internal http://controller:5000/v3
+	openstack endpoint create --region RegionOne \
+	  identity admin http://controller:35357/v3
+
+	openstack domain create --description "Default Domain" default
+	openstack project create --domain default \
+	  --description "Admin Project" admin
+	  openstack user create --domain default \
+	  --password-prompt admin
+	  openstack role create admin
+	  openstack role add --project admin --user admin admin
+	  
+	  openstack project create --domain default \
+	  --description "Service Project" service
+	  openstack project create --domain default \
+	  --description "Demo Project" demo
+	  openstack user create --domain default \
+	  --password-prompt demo
+	  openstack role create user
+	  openstack role add --project demo --user demo user
+
+
+	#创建 OpenStack 客户端环境脚本
+	#admin环境脚本
+	echo "
+	export OS_PROJECT_DOMAIN_NAME=default
+	export OS_USER_DOMAIN_NAME=default 
+	export OS_PROJECT_NAME=admin 
+	export OS_USERNAME=admin
+	export OS_PASSWORD=admin
+	export OS_AUTH_URL=http://controller:35357/v3
+	export OS_IDENTITY_API_VERSION=3
+	export OS_IMAGE_API_VERSION=2
+	">admin-openrc
+	#测试脚本是否生效
+	. admin-openrc
+	openstack token issue
+
+	#demo 用户环境认证脚本
+	echo "
+	export OS_PROJECT_DOMAIN_NAME=default
+	export OS_USER_DOMAIN_NAME=default
+	export OS_PROJECT_NAME=demo
+	export OS_USERNAME=demo
+	export OS_PASSWORD=demo
+	export OS_AUTH_URL=http://controller:5000/v3
+	export OS_IDENTITY_API_VERSION=3
+	export OS_IMAGE_API_VERSION=2
+	">demo-openrc
+	#测试脚本是否生效
+	. demo-openrc
+	openstack token issue
+
+
+
+##Glance 镜像服务
+
+	#创建Glance数据库、用户、认证，前面已设置
+
+	# keystone上服务注册 ,创建glance服务实体,API端点（公有、私有、admin）
+	source ./admin-openstack.sh || { echo "加载前面设置的admin-openstack.sh环境变量脚本";exit; }
+	openstack service create --name glance --description "OpenStack Image" image
+	openstack endpoint create --region RegionOne image public http://controller:9292
+	openstack endpoint create --region RegionOne image internal http://controller:9292
+	openstack endpoint create --region RegionOne image admin http://controller:9292
+
+	# Glance 安装
+	yum install -y openstack-glance python-glance
+	新建glance库
+	mysql -u root -p 123456
+	CREATE DATABASE glance;
+	GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'localhost' \
+	  IDENTIFIED BY 'GLANCE_DBPASS';
+	GRANT ALL PRIVILEGES ON glance.* TO 'glance'@'%' \
+	  IDENTIFIED BY 'GLANCE_DBPASS';
+	备份glance-api配置文件
+	cp /etc/glance/glance-api.conf{,.bak}
+	echo "
+	[database]
+	connection = mysql+pymysql://glance:glance@controller/glance
+	[keystone_authtoken]
+	auth_uri = http://controller:5000
+	auth_url = http://controller:35357
+	memcached_servers = controller:11211
+	auth_type = password
+	project_domain_name = default
+	user_domain_name = default
+	project_name = service
+	username = glance
+	password = glance
+	[paste_deploy]
+	flavor = keystone
+	[glance_store]
+	stores = file,http
+	default_store = file
+	filesystem_store_datadir = /var/lib/glance/images/
+	">/etc/glance/glance-api.conf
+
+	cp /etc/glance/glance-registry.conf {,.bak}
+	echo "
+	[database]
+	connection = mysql+pymysql://glance:glance@controller/glance
+	[keystone_authtoken]
+	auth_uri = http://controller:5000
+	auth_url = http://controller:35357
+	memcached_servers = controller:11211
+	auth_type = password
+	project_domain_name = default
+	user_domain_name = default
+	project_name = service
+	username = glance
+	password = glance
+	[paste_deploy]
+	flavor = keystone
+	">/etc/glance/glance-registry.conf
+
+
+	# su -s /bin/sh -c "glance-manage db_sync" glance
+
+	# systemctl enable openstack-glance-api.service \
+	  openstack-glance-registry.service
+	# systemctl start openstack-glance-api.service \
+	  openstack-glance-registry.service
+	  
+	下载一个cirros镜像然后尝试放进image库 
+	  openstack image create "cirros" \
+	  --file cirros-0.3.4-x86_64-disk.img \
+	  --disk-format qcow2 --container-format bare \
+	 --public
+	 
+##安装nova模块
+	安装nova库表
+	CREATE DATABASE nova_api;
+    CREATE DATABASE nova;
+	CREATE DATABASE nova_cell0;
+	GRANT ALL PRIVILEGES ON nova_api.* TO 'nova'@'localhost' \
+	  IDENTIFIED BY 'nova';
+	GRANT ALL PRIVILEGES ON nova_api.* TO 'nova'@'%' \
+	  IDENTIFIED BY 'nova';
+	GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'localhost' \
+	  IDENTIFIED BY 'nova';
+	GRANT ALL PRIVILEGES ON nova.* TO 'nova'@'%' \
+	  IDENTIFIED BY 'nova';
+	  GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'localhost' \
+  IDENTIFIED BY 'nova';
+  GRANT ALL PRIVILEGES ON nova_cell0.* TO 'nova'@'%' \
+  IDENTIFIED BY 'nova';
+	 
+	 注册nova用户、服务、实体
+	 . admin-openrc
+	 openstack user create --domain default \
+	  --password-prompt nova
+	  openstack role add --project service --user nova admin
+	  openstack service create --name nova \
+	  --description "OpenStack Compute" compute
+	  openstack endpoint create --region RegionOne \
+	  compute public http://controller:8774/v2.1/%\(tenant_id\)s
+	  openstack endpoint create --region RegionOne \
+	  compute internal http://controller:8774/v2.1/%\(tenant_id\)s
+	  openstack endpoint create --region RegionOne \
+	  compute admin http://controller:8774/v2.1/%\(tenant_id\)s
+	  
+	  openstack user create --domain default --password-prompt placement
+	  openstack role add --project service --user placement admin
+	  openstack service create --name placement --description "Placement API" placement
+	  openstack endpoint create --region RegionOne placement public http://controller:8778
+	  openstack endpoint create --region RegionOne placement internal http://controller:8778
+	  openstack endpoint create --region RegionOne placement admin http://controller:8778
+	 
+	 安装nova包
+	  yum install openstack-nova-api openstack-nova-conductor \
+	  openstack-nova-console openstack-nova-novncproxy \
+	  openstack-nova-scheduler
+	  openstack-nova-placement-api
+	  
+	  vi /etc/httpd/conf.d/00-nova-placement-api.conf
+		<Directory /usr/bin>
+		   <IfVersion >= 2.4>
+			  Require all granted
+		   </IfVersion>
+		   <IfVersion < 2.4>
+			  Order allow,deny
+			  Allow from all
+		   </IfVersion>
+		</Directory>
+	  配置文件
+	  cp /etc/nova/nova.conf{,.bak}
+	  
+echo "#	  
+[DEFAULT]
+# ...
+enabled_apis = osapi_compute,metadata
+transport_url = rabbit://openstack:RABBIT_PASS@controller
+my_ip = 172.27.34.175
+use_neutron = True
+firewall_driver = nova.virt.firewall.NoopFirewallDriver
+[api]
+# ...
+auth_strategy = keystone
+
+[keystone_authtoken]
+# ...
+auth_uri = http://controller:5000
+auth_url = http://controller:35357
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = default
+user_domain_name = default
+project_name = service
+username = nova
+password = nova
+[vnc]
+# ...
+enabled = True
+vncserver_listen = 0.0.0.0
+vncserver_proxyclient_address = $my_ip
+novncproxy_base_url = http://controller:6080/vnc_auto.html
+[glance]
+# ...
+api_servers = http://controller:9292
+[oslo_concurrency]
+# ...
+lock_path = /var/lib/nova/tmp
+[placement]
+# ...
+os_region_name = RegionOne
+project_domain_name = Default
+project_name = service
+auth_type = password
+user_domain_name = Default
+auth_url = http://controller:35357/v3
+username = placement
+password = placement
+#">/etc/nova/nova.conf
+	  
+	  systemctl restart openstack-nova-api.service \
+  openstack-nova-consoleauth.service openstack-nova-scheduler.service \
+  openstack-nova-conductor.service openstack-nova-novncproxy.service
+	  
+	  systemctl start openstack-nova-api.service 
+      systemctl start openstack-nova-consoleauth.service 
+      systemctl start openstack-nova-scheduler.service 
+      systemctl start openstack-nova-conductor.service
+      systemctl start openstack-nova-novncproxy.service
+	  
+	  systemctl status openstack-nova-api.service 
+      systemctl status openstack-nova-consoleauth.service 
+      systemctl status openstack-nova-scheduler.service 
+      systemctl status openstack-nova-conductor.service
+      systemctl status openstack-nova-novncproxy.service
+	
+	
+	GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'controller' \
+  IDENTIFIED BY 'neutron';
+  
+   GRANT ALL PRIVILEGES ON neutron.* TO 'neutron'@'%' \
+  IDENTIFIED BY 'neutron';
+  
+  systemctl restart neutron-server.service \
+  neutron-linuxbridge-agent.service neutron-dhcp-agent.service \
+  neutron-metadata-agent.service

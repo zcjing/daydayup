@@ -1,0 +1,19 @@
+# -*- coding:GBK -*-
+# Authro:          jzc
+# Program:        ollybdgæµ‹è¯•
+# History:        2018/3/7
+import os
+
+def test():
+    print("ÇëÊäÈëÃÜÂë")
+    str =input(":")
+    if str == 123 :
+        print("»¶Ó­")
+        fo = open("123.txt", "w")
+        fo.write('¹ş¹ş') 
+        fo.close
+    else:
+        print("´íÎó")
+
+         
+test()

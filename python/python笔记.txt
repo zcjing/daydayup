@@ -1,0 +1,14 @@
+python 安装
+1.环境依赖安装
+yum install openssl-devel bzip2-devel expat-devel gdbm-devel readline-devel sqlite-devel
+2.下载安装python
+tar -xvJf python.tar.xz
+mv Python-3.6.4 /usr/local/python-3.6.4
+在/usr/bin下删除python(默认版本python)
+回到安装目录./configure
+make
+make install
+3.在系统里的/usr/bin/python是软连到2.6，把安装目录里的python重新进行链接，并修改yum配置
+vim /usr/bin/yum
+vim /usr/libexec/urlgrabber-ext-down
+将头部#!/usr/bin/python 改为 #!/usr/bin/python2.7

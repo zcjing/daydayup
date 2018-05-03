@@ -298,5 +298,35 @@ redis学习笔记
 		    redis-server redis.conf
 			
 3.集群搭建
+       1.4台物理机
+	     172.27.34.198 6379 主 
+		 172.27.34.199 6379 从
+		 172.27.34.198 6380 从
+		 172.27.34.170 26379 sentinel
+		 172.27.34.170 26380 sentinel
+		 172.27.34.171 26379 sentinel
+	   2.2从开启主从复制 slaveof 172.27.34.198 6379
+	     sentinel启动 (3个)redis-server 26380.conf --sentinel
 
+		        vi sentinel.conf
+				port 26380
+				#工作路径，注意路径不要和主重复
+				dir "/usr/local/redis-6380"
+				# 守护、保护进程模式 注意保护模式，去除bind
+				daemonize yes
+				protected-mode no 
+				# 指明日志文件名
+				logfile "./sentinel.log"
+				#哨兵监控的master，主从配置一样，
+				sentinel monitor mymaster 172.27.34.198 6379 1
+				# master或slave多长时间（默认30秒）不能使用后标记为s_down状态。
+				sentinel down-after-milliseconds mymaster 5000
+				#若sentinel在该配置值内未能完成failover操作（即故障时master/slave自动切换），则认为本次failover失败。
+				sentinel failover-timeout mymaster 18000
+          查看sentinel状态 info sentinel
+		                   sentinel masters
+		                   sentinel slaves mymaster
+						   
+        3.关主，查看切换。OK
+         
      

@@ -1,0 +1,20 @@
+activeMQ 笔记
+
+1.安装activeMQ 
+    1.官网下载apache-activemq-5.14.4 java JDK
+	2.安装Java rpm -ivh jdk-8u171-linux-x64.rpm
+	3.安装activeMQ 
+	   tar -zxvf apache-activemq-5.14.0-bin.tar.gz
+ 		cd apache-activemq-5.14.0
+		cd bin
+		./activemq start
+		检查进程是否启动 netstat -anp|grep 61616 
+		关闭 ./activemq stop
+    4.web打开http://172.27.34.199:8161/admin/ admin/admin
+
+2.activeMQ 两种模式
+     修改配置文件，添加用户及端口    
+
+ 	生产、消费 queue
+	 
+	 订阅 topic

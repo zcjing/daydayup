@@ -1,0 +1,31 @@
+ubuntu安装maas
+1.安装ubuntu 14
+  默认安装
+  sudo vi /etc/network/interfaces
+
+		auto eth0
+		iface eth0 inet static
+		address 172.27.34.234
+		gateway 172.27.34.1
+		netmask 255.255.255.0
+		#broadcast 172.27.34.255
+		dns-nameservers 202.103.24.68
+  重启sudo reboot
+
+2.安装maas（配置的时候一定要关闭DHCP，且配置静态IP）
+   查看安装软件dpkg -l XXXX
+	sudo apt-get update
+	sudo apt-get install maas
+    打开http://172.27.34.234:5240 会提示新建maas用户
+	sudo maas-region-admin createadmin
+	设置用户密码admin/admin 邮箱
+
+	
+	
+MAAS服务器修改为IP address后DNS/DHCP异常解决方法
+
+$ sudo dpkg-reconfigure maas-region-controller
+$ sudo dpkg-reconfigure maas-cluster-controller
+$ sudo reboot
+
+
